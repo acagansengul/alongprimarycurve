@@ -78,6 +78,17 @@ def get_source_amps2(mapping,data):
     amp = nnls(Amatrix,Bmatrix)[0]
     modelpred = np.matmul(mapping, amp)
     return amp,modelpred
+
+def get_source_amps_REG(mapping,data,lambda_reg,Hmatrix):
+    ## This is the new function to obtain the source amplitudes
+    ## with regularization. Solving Eq 12 in Warren and Dye (2023)
+    Amatrix = np.matmul(mapping.T, mapping)
+    Bmatrix = np.matmul(mapping.T, data)       
+    #invA = np.linalg.inv(Amatrix)
+    print('correct one NNLS')
+    amp = nnls(Amatrix + lambda_reg*Hmatrix,Bmatrix)[0]
+    modelpred = np.matmul(mapping, amp)
+    return amp,modelpred
     
 def flatten_psf(psfarray):
     psfflat = []
@@ -253,7 +264,121 @@ def linearfit_eigencurve_basis_deflection_image(lens_params,flatdata,scord,flatc
     
     return amps,models,lensfunc0,delaunay
     
+def linearfit_eigencurve_basis_deflection_image_FAST_0TH_REGULARIZED(lens_params,flatdata,scord,flatcoords,psf_matrix,deltaPix,lambda_reg):
+    curve_params = lens_params['curve_params'] 
+    lambda_1poly = lens_params['lambda_1poly']
+    lambda_2poly = lens_params['lambda_2poly']
+    Fpoly = lens_params['Fpoly']
+    H0 = lens_params['H0']
     
+    
+    lensfunc0 = fu.make_lens_func(curve_params,lambda_1poly,lambda_2poly,Fpoly,H0)
+
+    ######## MAKE SOURCE KDTREE
+    sourcex = np.zeros(len(scord[:,0]))
+    sourcey = np.zeros(len(scord[:,0]))
+    for i in range(len(scord[:,0])):
+        sourcex[i],sourcey[i] = make_source_cells(scord[i,0],scord[i,1],lensfunc0)
+    sourcepointarray = np.array([sourcex,sourcey]).T
+    delaunay = Delaunay(sourcepointarray)
+    kdtree = KDTree(sourcepointarray)
+    ########
+
+    int_map_test_triangle = map_source_intensity_triangle(lensfunc0,delaunay)
+    int_map_test = map_source_intensity(lensfunc0,kdtree)
+    
+    coeffs = np.zeros([len(flatdata),3])
+    indices = np.zeros([len(flatdata),3])
+
+
+    for i in range(len(flatdata)):
+        index = int_map_test_triangle(flatcoords[i,0],flatcoords[i,1])
+        if index[0] == -1:
+            indexnearest = int_map_test(flatcoords[i,0],flatcoords[i,1])
+            coeffs[i] = np.array([1.,1.,1.])
+            indices[i] = np.array([indexnearest,indexnearest,indexnearest])
+        else:
+            source_triangle = sourcepointarray[index]
+            lensedx,lensedy = lensfunc0(flatcoords[i,0],flatcoords[i,1])
+            coeffs[i] = get_amplitude_effect(source_triangle,[lensedx,lensedy])
+            indices[i] = index#np.array([-1,-1,-1])
+    mapping_matrix0 = np.zeros([len(flatdata),np.shape(sourcepointarray)[0]])
+    for i in range(len(flatdata)):
+        for j in range(3):
+            #if indices[i,j] != -1:
+            mapping_matrix0[i,int(indices[i,j])] = coeffs[i,j]
+            
+    mapping_matrix = np.matmul(psf_matrix,mapping_matrix0)
+    Hmatrix = np.identity(np.shape(sourcepointarray)[0])
+    
+#    singulartest = np.min(np.max(np.abs(mapping_matrix),axis=0))
+#    if singulartest == 0.:
+#        print('singular!')
+#        amps,models = np.zeros(len(scord[:,0])),np.zeros(len(flatdata))
+#    else:
+        #amps,models = get_source_amps(mapping_matrix,flatdata)
+    amps,models = get_source_amps_REG(mapping_matrix,flatdata,lambda_reg,Hmatrix)
+    
+    return amps,models,lensfunc0,delaunay  
+
+
+def linearfit_eigencurve_basis_deflection_image_FAST_GRADIENT_REGULARIZED(lens_params,flatdata,scord,flatcoords,psf_matrix,deltaPix,lambda_reg):
+    curve_params = lens_params['curve_params'] 
+    lambda_1poly = lens_params['lambda_1poly']
+    lambda_2poly = lens_params['lambda_2poly']
+    Fpoly = lens_params['Fpoly']
+    H0 = lens_params['H0']
+    
+    
+    lensfunc0 = fu.make_lens_func(curve_params,lambda_1poly,lambda_2poly,Fpoly,H0)
+
+    ######## MAKE SOURCE KDTREE
+    sourcex = np.zeros(len(scord[:,0]))
+    sourcey = np.zeros(len(scord[:,0]))
+    for i in range(len(scord[:,0])):
+        sourcex[i],sourcey[i] = make_source_cells(scord[i,0],scord[i,1],lensfunc0)
+    sourcepointarray = np.array([sourcex,sourcey]).T
+    delaunay = Delaunay(sourcepointarray)
+    kdtree = KDTree(sourcepointarray)
+    ########
+
+    int_map_test_triangle = map_source_intensity_triangle(lensfunc0,delaunay)
+    int_map_test = map_source_intensity(lensfunc0,kdtree)
+    
+    coeffs = np.zeros([len(flatdata),3])
+    indices = np.zeros([len(flatdata),3])
+
+
+    for i in range(len(flatdata)):
+        index = int_map_test_triangle(flatcoords[i,0],flatcoords[i,1])
+        if index[0] == -1:
+            indexnearest = int_map_test(flatcoords[i,0],flatcoords[i,1])
+            coeffs[i] = np.array([1.,1.,1.])
+            indices[i] = np.array([indexnearest,indexnearest,indexnearest])
+        else:
+            source_triangle = sourcepointarray[index]
+            lensedx,lensedy = lensfunc0(flatcoords[i,0],flatcoords[i,1])
+            coeffs[i] = get_amplitude_effect(source_triangle,[lensedx,lensedy])
+            indices[i] = index#np.array([-1,-1,-1])
+    mapping_matrix0 = np.zeros([len(flatdata),np.shape(sourcepointarray)[0]])
+    for i in range(len(flatdata)):
+        for j in range(3):
+            #if indices[i,j] != -1:
+            mapping_matrix0[i,int(indices[i,j])] = coeffs[i,j]
+            
+    mapping_matrix = np.matmul(psf_matrix,mapping_matrix0)
+    Hmatrix = get_gradient_matrix(delaunay)# - np.identity(np.shape(sourcepointarray)[0])
+    #np.identity(np.shape(sourcepointarray)[0])
+    
+#    singulartest = np.min(np.max(np.abs(mapping_matrix),axis=0))
+#    if singulartest == 0.:
+#        print('singular!')
+#        amps,models = np.zeros(len(scord[:,0])),np.zeros(len(flatdata))
+#    else:
+        #amps,models = get_source_amps(mapping_matrix,flatdata)
+    amps,models = get_source_amps_REG(mapping_matrix,flatdata,lambda_reg,Hmatrix)
+    
+    return amps,models,lensfunc0,delaunay    
     
 def visualize_delaunay_source(delaunay,amplitudes,xlow,xhigh,ylow,yhigh):
     sourcepoints = delaunay.points
